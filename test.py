@@ -5,13 +5,14 @@ import csv
 import random
 import os
 import glob
+import re
 from datetime import datetime
-# Todo: 错题训练的选项混淆
+
 class QuizApp:
     def __init__(self, root):
         self.root = root
         self.root.title("单词小测")
-        self.root.geometry("640x540")
+        self.root.geometry("700x580")
         
         # 数据
         self.all_words = []
@@ -21,21 +22,83 @@ class QuizApp:
         self.score = 0
         self.total = 0
         self.wrong = []
-        self.wrong_words = []  # 错题词库（用于错题训练）
-        self.mode = 0  # 0: 日译中, 1: 中译日, 2: 词性, 3: 错题训练
+        self.wrong_words = []
+        self.mastered_words = []  # 已掌握单词列表
+        self.mode = 0  # 0: 日译中, 1: 中译日, 2: 词性, 3: 读音, 4: 假名->汉字
         self.cur_word = None
         self.csv_files = []
         self.cur_file = None
         self.quiz_num = 20
         self.sel_var = tk.IntVar(value=-1)
-        self.wrong_file = None  # 记录本次错题导出的文件名
-        self.is_wrong_mode = False  # 是否处于错题训练模式
+        self.wrong_file = None
+        self.is_wrong_mode = False
+        self.skip_mastered = tk.BooleanVar(value=False)  # 是否跳过已掌握单词
+        self.need_record = False  # 当前题是否需要记录（答对或订正后记录）
         
         self.setup_ui()
+        self.load_mastered()  # 加载已掌握单词记录
         self.load_all_csv()
     
+    def is_kana_word(self, text):
+        clean = re.sub(r'[（(）).]', '', text)
+        kana_pattern = re.compile(r'^[\u30A0-\u30FF\u30FC]+$')
+        return bool(kana_pattern.match(clean))
+    
+    def has_reading(self, word):
+        if self.is_kana_word(word['jp']):
+            return False
+        if not word['reading'] or word['reading'].strip() == '':
+            return False
+        return True
+    
+    def is_kanji_word(self, text):
+        kanji_pattern = re.compile(r'[\u4E00-\u9FFF]')
+        return bool(kanji_pattern.search(text))
+    
+    def get_reading_for_display(self, reading):
+        clean = re.sub(r'[①②③④⑤⑥⑦⑧⑨⑩]', '', reading)
+        clean = re.sub(r'[（(）).]', '', clean)
+        return clean.strip()
+    
+    def get_word_key(self, word):
+        """生成单词的唯一标识"""
+        return f"{word['jp']}|{word['cn']}"
+    
+    def is_mastered(self, word):
+        """判断单词是否已掌握"""
+        key = self.get_word_key(word)
+        return key in self.mastered_words
+    
+    def load_mastered(self):
+        """加载已掌握单词记录"""
+        self.mastered_words = []
+        if os.path.exists("mastered.txt"):
+            try:
+                with open("mastered.txt", "r", encoding="utf-8") as fp:
+                    for line in fp:
+                        line = line.strip()
+                        if line:
+                            self.mastered_words.append(line)
+            except:
+                pass
+    
+    def save_mastered(self):
+        """保存已掌握单词记录"""
+        try:
+            with open("mastered.txt", "w", encoding="utf-8") as fp:
+                for key in self.mastered_words:
+                    fp.write(key + "\n")
+        except:
+            pass
+    
+    def add_mastered(self, word):
+        """添加单词到已掌握列表"""
+        key = self.get_word_key(word)
+        if key not in self.mastered_words:
+            self.mastered_words.append(key)
+            self.save_mastered()
+    
     def setup_ui(self):
-        # 菜单
         mb = tk.Menu(self.root)
         self.root.config(menu=mb)
         
@@ -46,28 +109,46 @@ class QuizApp:
         fm.add_separator()
         fm.add_command(label="退出", command=self.root.quit)
         
-        # 模式选择
+        # 模式选择 - 第一行
         mf = tk.Frame(self.root)
         mf.pack(pady=5)
         
         tk.Label(mf, text="测验模式:").pack(side=tk.LEFT, padx=5)
         self.mode_var = tk.StringVar(value="jp2cn")
-        modes = [("日译中", "jp2cn"), ("中译日", "cn2jp"), ("词性判断", "full")]
-        for t, v in modes:
+        
+        modes_row1 = [("日译中", "jp2cn"), ("中译日", "cn2jp"), ("词性", "full"), ("读音", "reading")]
+        for t, v in modes_row1:
             tk.Radiobutton(mf, text=t, variable=self.mode_var, 
                           value=v, command=self.set_mode).pack(side=tk.LEFT, padx=5)
         
-        # 错题训练模式按钮
-        self.wrong_btn = tk.Button(mf, text="错题训练", command=self.start_wrong_mode,
-                                   fg="red", width=8)
+        # 模式选择 - 第二行
+        mf2 = tk.Frame(self.root)
+        mf2.pack(pady=2)
+        
+        tk.Radiobutton(mf2, text="假名->汉字", variable=self.mode_var, 
+                      value="kana2kanji", command=self.set_mode).pack(side=tk.LEFT, padx=5)
+        
+        # 错题训练按钮
+        self.wrong_btn = tk.Button(mf2, text="错题训练 (0)", command=self.start_wrong_mode,
+                                   fg="red", width=10)
         self.wrong_btn.pack(side=tk.LEFT, padx=10)
         
+        # 跳过已掌握单词的复选框
+        self.skip_cb = tk.Checkbutton(mf2, text="排除已掌握", 
+                                      variable=self.skip_mastered,
+                                      command=self.on_skip_changed)
+        self.skip_cb.pack(side=tk.LEFT, padx=10)
+        
         # 每轮题数
-        tk.Label(mf, text="  每题数:").pack(side=tk.LEFT, padx=(20,5))
+        tk.Label(mf2, text="每题数:").pack(side=tk.LEFT, padx=(20,5))
         self.num_var = tk.StringVar(value="20")
-        num_spin = tk.Spinbox(mf, from_=5, to=50, width=4, 
+        num_spin = tk.Spinbox(mf2, from_=5, to=50, width=4, 
                               textvariable=self.num_var, command=self.set_quiz_num)
         num_spin.pack(side=tk.LEFT)
+        
+        # 已掌握单词计数
+        self.mastered_lb = tk.Label(self.root, text="已掌握: 0 个单词", fg="green")
+        self.mastered_lb.pack(pady=2)
         
         # 文件信息
         self.file_lb = tk.Label(self.root, text="CSV文件: 0  |  总词数: 0", fg="blue")
@@ -82,7 +163,7 @@ class QuizApp:
         self.info_lb.pack(pady=5)
         
         # 题目
-        self.q_lb = tk.Label(self.root, text="", font=("微软雅黑", 14), wraplength=600)
+        self.q_lb = tk.Label(self.root, text="", font=("微软雅黑", 14), wraplength=640)
         self.q_lb.pack(pady=20)
         
         # 选项
@@ -113,6 +194,10 @@ class QuizApp:
         self.res_lb = tk.Label(self.root, text="", font=("微软雅黑", 12))
         self.res_lb.pack(pady=10)
     
+    def on_skip_changed(self):
+        """排除已掌握单词选项变更时触发"""
+        self.restart()
+    
     def set_quiz_num(self):
         try:
             v = int(self.num_var.get())
@@ -122,26 +207,37 @@ class QuizApp:
             pass
     
     def set_mode(self):
+        mode_map = {"jp2cn": 0, "cn2jp": 1, "full": 2, "reading": 3, "kana2kanji": 4}
+        new_mode = mode_map.get(self.mode_var.get(), 0)
+        
+        if new_mode == 3:
+            has_reading_words = [w for w in self.all_words if self.has_reading(w)]
+            if len(has_reading_words) < 5:
+                messagebox.showwarning("提示", "当前词库中可考读音的单词（非片假名）不足5个")
+                return
+        
+        if new_mode == 4:
+            kanji_words = [w for w in self.all_words if self.is_kanji_word(w['jp']) and self.has_reading(w)]
+            if len(kanji_words) < 5:
+                messagebox.showwarning("提示", "当前词库中可考汉字的单词（含汉字且有读音）不足5个")
+                return
+        
         self.is_wrong_mode = False
         self.mode_hint.config(text="")
-        self.mode = {"jp2cn": 0, "cn2jp": 1, "full": 2}[self.mode_var.get()]
+        self.mode = new_mode
         self.restart()
     
     def start_wrong_mode(self):
-        """启动错题训练模式"""
         if not self.wrong_words:
-            # 尝试从最近导出的错题文件导入
             if messagebox.askyesno("提示", "没有错题记录。是否从错题文件导入？"):
                 self.import_wrong()
             return
         
         self.is_wrong_mode = True
         self.mode_hint.config(text="【错题训练模式】", fg="red")
-        self.words = self.wrong_words[:]
         self.restart()
     
     def load_all_csv(self):
-        """读取当前目录下所有CSV文件"""
         self.all_words = []
         files = glob.glob("*.csv")
         self.csv_files = files
@@ -157,15 +253,14 @@ class QuizApp:
             total += cnt
         
         self.file_lb.config(text=f"CSV文件: {len(files)}  |  总词数: {total}", fg="blue")
+        self.mastered_lb.config(text=f"已掌握: {len(self.mastered_words)} 个单词", fg="green")
         
         if self.all_words:
-            self.words = self.all_words[:]
             self.restart()
         else:
             self.q_lb.config(text="CSV文件中未找到有效数据")
     
     def load_csv_file(self, path):
-        """加载单个CSV文件，返回词数"""
         cnt = 0
         try:
             with open(path, "r", encoding="utf-8") as fp:
@@ -186,9 +281,38 @@ class QuizApp:
             print(f"加载 {path} 失败: {e}")
         return cnt
     
+    def get_word_pool(self):
+        """获取当前可用的单词池（根据模式和排除选项）"""
+        base = self.all_words if not self.is_wrong_mode else self.wrong_words
+        
+        # 根据模式筛选
+        if self.mode == 3:
+            pool = [w for w in base if self.has_reading(w)]
+        elif self.mode == 4:
+            pool = [w for w in base if self.is_kanji_word(w['jp']) and self.has_reading(w)]
+        else:
+            pool = base[:]
+        
+        # 排除已掌握单词
+        if self.skip_mastered.get():
+            pool = [w for w in pool if not self.is_mastered(w)]
+        
+        return pool
+    
     def restart(self):
-        if not self.words:
+        pool = self.get_word_pool()
+        if not pool:
+            msg = "当前没有可用的单词"
+            if self.skip_mastered.get():
+                msg += "（已掌握单词已被排除）"
+                if messagebox.askyesno("提示", msg + "。是否取消排除已掌握单词？"):
+                    self.skip_mastered.set(False)
+                    self.restart()
+            else:
+                messagebox.showwarning("提示", msg)
             return
+        
+        self.words = pool
         self.gen_qs()
         self.idx = 0
         self.score = 0
@@ -217,14 +341,16 @@ class QuizApp:
         
         w = self.qs[self.idx]
         self.cur_word = w
+        self.need_record = False
         self.sel_var.set(-1)
         self.res_lb.config(text="")
         self.submit_btn.config(state=tk.NORMAL)
         self.next_btn.config(state=tk.DISABLED)
         
-        # 显示模式信息
         mode_text = "错题训练" if self.is_wrong_mode else "普通"
-        self.info_lb.config(text=f"[{mode_text}] 单词: {len(self.words)}  |  得分: {self.score}/{self.total}")
+        mode_names = ["日译中", "中译日", "词性", "读音", "假名->汉字"]
+        skip_text = " [排除已掌握]" if self.skip_mastered.get() else ""
+        self.info_lb.config(text=f"[{mode_text}/{mode_names[self.mode]}{skip_text}] 单词: {len(self.words)}  |  得分: {self.score}/{self.total}")
         
         opts = self.get_opts(w)
         q = self.get_q_text(w)
@@ -242,8 +368,13 @@ class QuizApp:
             return f"第{self.idx+1}题（共{self.total}题） 选择正确的中文释义：\n\n{w['jp']}  【{w['reading']}】"
         elif mode == 1:
             return f"第{self.idx+1}题（共{self.total}题） 选择正确的日语：\n\n{w['cn']}"
-        else:
+        elif mode == 2:
             return f"第{self.idx+1}题（共{self.total}题） 选择正确的词性：\n\n{w['jp']}  【{w['reading']}】\n{w['cn']}"
+        elif mode == 3:
+            return f"第{self.idx+1}题（共{self.total}题） 选择正确的读音：\n\n{w['jp']}"
+        else:
+            reading_display = self.get_reading_for_display(w['reading'])
+            return f"第{self.idx+1}题（共{self.total}题） 选择对应的日语（汉字）：\n\n【{reading_display}】"
     
     def get_opts(self, w):
         mode = self.mode
@@ -276,12 +407,40 @@ class QuizApp:
             opts = [correct] + wrong[:3]
             random.shuffle(opts)
             return opts
-        else:
+        elif mode == 2:
             correct = w['pos']
             wrong = []
             for p in pool:
                 if p['pos'] != correct and p['pos'] not in wrong:
                     wrong.append(p['pos'])
+                if len(wrong) >= 3:
+                    break
+            while len(wrong) < 3:
+                wrong.append("---")
+            opts = [correct] + wrong[:3]
+            random.shuffle(opts)
+            return opts
+        elif mode == 3:
+            correct = w['reading']
+            reading_pool = [p for p in pool if p['reading'] and p['reading'].strip() != '']
+            wrong = []
+            for p in reading_pool:
+                if p['reading'] != correct and p['reading'] not in wrong:
+                    wrong.append(p['reading'])
+                if len(wrong) >= 3:
+                    break
+            while len(wrong) < 3:
+                wrong.append("---")
+            opts = [correct] + wrong[:3]
+            random.shuffle(opts)
+            return opts
+        else:
+            correct = w['jp']
+            kanji_pool = [p for p in pool if self.is_kanji_word(p['jp']) and self.has_reading(p)]
+            wrong = []
+            for p in kanji_pool:
+                if p['jp'] != correct and p['jp'] not in wrong:
+                    wrong.append(p['jp'])
                 if len(wrong) >= 3:
                     break
             while len(wrong) < 3:
@@ -312,26 +471,97 @@ class QuizApp:
             correct = w['cn']
         elif mode == 1:
             correct = w['jp']
-        else:
+        elif mode == 2:
             correct = w['pos']
+        elif mode == 3:
+            correct = w['reading']
+        else:
+            correct = w['jp']
+        
+        chosen = opts[sel]
+        is_correct = (chosen == correct)
+        
+        if is_correct:
+            self.score += 1
+            self.res_lb.config(text="回答正确！", fg="green")
+            # 答对即记录为已掌握
+            self.add_mastered(w)
+            self.need_record = True
+            self.mastered_lb.config(text=f"已掌握: {len(self.mastered_words)} 个单词", fg="green")
+        else:
+            wrong_entry = f"{w['jp']}|{w['reading']}|{w['pos']}|{w['cn']}|{w.get('src','')}"
+            self.wrong.append(wrong_entry)
+            self.res_lb.config(text=f"回答错误。正确答案：{correct}", fg="red")
+            # 显示订正按钮
+            self.submit_btn.config(text="订正", command=self.correct_submit)
+        
+        self.submit_btn.config(state=tk.DISABLED)
+        self.next_btn.config(state=tk.NORMAL)
+        mode_names = ["日译中", "中译日", "词性", "读音", "假名->汉字"]
+        mode_text = "错题训练" if self.is_wrong_mode else "普通"
+        skip_text = " [排除已掌握]" if self.skip_mastered.get() else ""
+        self.info_lb.config(text=f"[{mode_text}/{mode_names[self.mode]}{skip_text}] 单词: {len(self.words)}  |  得分: {self.score}/{self.total}")
+    
+    def correct_submit(self):
+        """订正功能：点击订正后，如果用户选择了正确答案则记录"""
+        # 重新启用提交按钮，但改名为"确认订正"
+        self.submit_btn.config(text="确认订正", command=self.confirm_correct, state=tk.NORMAL)
+        self.res_lb.config(text="请重新选择正确答案进行订正", fg="blue")
+    
+    def confirm_correct(self):
+        """确认订正：用户选择正确答案后记录为已掌握"""
+        sel = self.sel_var.get()
+        
+        if sel == -1:
+            messagebox.showinfo("提示", "请先选择一个选项进行订正")
+            return
+        
+        opts = []
+        for rb in self.opt_btns:
+            if rb.cget("state") != tk.DISABLED:
+                opts.append(rb.cget("text"))
+        
+        if sel >= len(opts):
+            return
+        
+        w = self.cur_word
+        mode = self.mode
+        correct = ""
+        if mode == 0:
+            correct = w['cn']
+        elif mode == 1:
+            correct = w['jp']
+        elif mode == 2:
+            correct = w['pos']
+        elif mode == 3:
+            correct = w['reading']
+        else:
+            correct = w['jp']
         
         chosen = opts[sel]
         
         if chosen == correct:
-            self.score += 1
-            self.res_lb.config(text="回答正确！", fg="green")
+            # 订正正确，记录为已掌握
+            self.add_mastered(w)
+            self.mastered_lb.config(text=f"已掌握: {len(self.mastered_words)} 个单词", fg="green")
+            self.res_lb.config(text="订正正确！已记录为掌握", fg="green")
+            
+            # 从错题列表中移除（如果存在）
+            wrong_key = f"{w['jp']}|{w['reading']}|{w['pos']}|{w['cn']}"
+            self.wrong = [item for item in self.wrong if wrong_key not in item]
         else:
-            # 记录错题（包含完整信息）
-            wrong_entry = f"{w['jp']}|{w['reading']}|{w['pos']}|{w['cn']}|{w.get('src','')}"
-            self.wrong.append(wrong_entry)
-            self.res_lb.config(text=f"回答错误。正确答案：{correct}", fg="red")
+            self.res_lb.config(text=f"订正错误。正确答案：{correct}。请继续订正", fg="red")
+            # 订正错误，允许继续尝试
+            self.submit_btn.config(text="确认订正", command=self.confirm_correct, state=tk.NORMAL)
+            return
         
-        self.submit_btn.config(state=tk.DISABLED)
+        # 恢复提交按钮
+        self.submit_btn.config(text="提交", command=self.submit, state=tk.DISABLED)
         self.next_btn.config(state=tk.NORMAL)
-        mode_text = "错题训练" if self.is_wrong_mode else "普通"
-        self.info_lb.config(text=f"[{mode_text}] 单词: {len(self.words)}  |  得分: {self.score}/{self.total}")
     
     def next_q(self):
+        # 恢复提交按钮
+        self.submit_btn.config(text="提交", command=self.submit, state=tk.NORMAL)
         self.idx += 1
         self.show_q()
     
@@ -341,11 +571,9 @@ class QuizApp:
         self.next_btn.config(state=tk.DISABLED)
         self.res_lb.config(text="")
         
-        # 有错题则自动导出
         if self.wrong:
             self.auto_export_wrong()
             
-            # 更新错题词库（累积）
             for item in self.wrong:
                 parts = item.split("|")
                 if len(parts) >= 4:
@@ -356,7 +584,6 @@ class QuizApp:
                         "cn": parts[3],
                         "src": "错题"
                     }
-                    # 去重
                     exists = False
                     for w in self.wrong_words:
                         if w['jp'] == new_word['jp'] and w['cn'] == new_word['cn']:
@@ -365,7 +592,6 @@ class QuizApp:
                     if not exists:
                         self.wrong_words.append(new_word)
             
-            # 更新错题训练按钮状态
             self.wrong_btn.config(text=f"错题训练 ({len(self.wrong_words)})", fg="red")
             
             msg = f"错题数：{len(self.wrong)}。已自动导出到：{self.wrong_file}\n错题总数：{len(self.wrong_words)}"
@@ -373,11 +599,8 @@ class QuizApp:
         else:
             if self.is_wrong_mode:
                 messagebox.showinfo("恭喜", "错题全部掌握！继续加油！")
-                # 清空错题词库中已掌握的
-                # 但保留原错题文件
     
     def auto_export_wrong(self):
-        """自动导出错题"""
         if not self.wrong:
             return
         
@@ -400,7 +623,6 @@ class QuizApp:
             print(f"自动导出失败：{e}")
     
     def import_wrong(self):
-        """导入错题文件到错题词库"""
         f = filedialog.askopenfilename(filetypes=[("文本文件", "*.txt")])
         if not f:
             return
@@ -425,7 +647,6 @@ class QuizApp:
                             cn = p.split("中文:")[1].strip()
                     if jp and cn:
                         new_word = {"jp": jp, "reading": rd, "pos": pos, "cn": cn, "src": "导入"}
-                        # 去重
                         exists = False
                         for w in self.wrong_words:
                             if w['jp'] == new_word['jp'] and w['cn'] == new_word['cn']:
