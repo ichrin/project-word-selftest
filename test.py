@@ -12,7 +12,7 @@ class QuizApp:
     def __init__(self, root):
         self.root = root
         self.root.title("单词小测")
-        self.root.geometry("700x580")
+        self.root.geometry("720x600")
         
         # 数据
         self.all_words = []
@@ -23,7 +23,7 @@ class QuizApp:
         self.total = 0
         self.wrong = []
         self.wrong_words = []
-        self.mastered_words = []  # 已掌握单词列表
+        self.mastered_words = []
         self.mode = 0  # 0: 日译中, 1: 中译日, 2: 词性, 3: 读音, 4: 假名->汉字
         self.cur_word = None
         self.csv_files = []
@@ -32,11 +32,39 @@ class QuizApp:
         self.sel_var = tk.IntVar(value=-1)
         self.wrong_file = None
         self.is_wrong_mode = False
-        self.skip_mastered = tk.BooleanVar(value=False)  # 是否跳过已掌握单词
-        self.need_record = False  # 当前题是否需要记录（答对或订正后记录）
+        self.skip_mastered = tk.BooleanVar(value=False)
+        self.need_record = False
+        
+        # 词性筛选选项（默认全选）
+        self.pos_filters = {
+            "名": tk.BooleanVar(value=True),
+            "他I": tk.BooleanVar(value=True),
+            "他II": tk.BooleanVar(value=True),
+            "他Ⅲ": tk.BooleanVar(value=True),
+            "自I": tk.BooleanVar(value=True),
+            "自II": tk.BooleanVar(value=True),
+            "自Ⅲ": tk.BooleanVar(value=True),
+            "形I": tk.BooleanVar(value=True),
+            "形II": tk.BooleanVar(value=True),
+            "副": tk.BooleanVar(value=True),
+            "連体": tk.BooleanVar(value=True),
+            "接": tk.BooleanVar(value=True),
+            "感": tk.BooleanVar(value=True),
+            "接頭": tk.BooleanVar(value=True),
+            "接尾": tk.BooleanVar(value=True),
+            "取立て助": tk.BooleanVar(value=True),
+            "格助": tk.BooleanVar(value=True),
+            "接助": tk.BooleanVar(value=True),
+            "終助": tk.BooleanVar(value=True),
+            "並助": tk.BooleanVar(value=True),
+            "準助": tk.BooleanVar(value=True),
+            "準体": tk.BooleanVar(value=True),
+            "連体": tk.BooleanVar(value=True),
+            "固名": tk.BooleanVar(value=True),
+        }
         
         self.setup_ui()
-        self.load_mastered()  # 加载已掌握单词记录
+        self.load_mastered()
         self.load_all_csv()
     
     def is_kana_word(self, text):
@@ -61,16 +89,13 @@ class QuizApp:
         return clean.strip()
     
     def get_word_key(self, word):
-        """生成单词的唯一标识"""
         return f"{word['jp']}|{word['cn']}"
     
     def is_mastered(self, word):
-        """判断单词是否已掌握"""
         key = self.get_word_key(word)
         return key in self.mastered_words
     
     def load_mastered(self):
-        """加载已掌握单词记录"""
         self.mastered_words = []
         if os.path.exists("mastered.txt"):
             try:
@@ -83,7 +108,6 @@ class QuizApp:
                 pass
     
     def save_mastered(self):
-        """保存已掌握单词记录"""
         try:
             with open("mastered.txt", "w", encoding="utf-8") as fp:
                 for key in self.mastered_words:
@@ -92,7 +116,6 @@ class QuizApp:
             pass
     
     def add_mastered(self, word):
-        """添加单词到已掌握列表"""
         key = self.get_word_key(word)
         if key not in self.mastered_words:
             self.mastered_words.append(key)
@@ -109,75 +132,113 @@ class QuizApp:
         fm.add_separator()
         fm.add_command(label="退出", command=self.root.quit)
         
-        # 模式选择 - 第一行
-        mf = tk.Frame(self.root)
-        mf.pack(pady=5)
+        # 主框架 - 分为左右两部分
+        main_frame = tk.Frame(self.root)
+        main_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
         
-        tk.Label(mf, text="测验模式:").pack(side=tk.LEFT, padx=5)
+        # 左侧：控制区
+        left_frame = tk.Frame(main_frame, width=300)
+        left_frame.pack(side=tk.LEFT, fill=tk.Y, padx=5)
+        left_frame.pack_propagate(False)
+        
+        # 右侧：题目区
+        right_frame = tk.Frame(main_frame)
+        right_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=5)
+        
+        # --- 左侧控制区 ---
+        # 模式选择
+        tk.Label(left_frame, text="测验模式:", font=("微软雅黑", 10, "bold")).pack(anchor=tk.W, pady=(0,5))
         self.mode_var = tk.StringVar(value="jp2cn")
+        modes = [("日译中", "jp2cn"), ("中译日", "cn2jp"), 
+                 ("词性", "full"), ("读音", "reading"), ("假名->汉字", "kana2kanji")]
+        for t, v in modes:
+            tk.Radiobutton(left_frame, text=t, variable=self.mode_var, 
+                          value=v, command=self.set_mode).pack(anchor=tk.W, padx=10)
         
-        modes_row1 = [("日译中", "jp2cn"), ("中译日", "cn2jp"), ("词性", "full"), ("读音", "reading")]
-        for t, v in modes_row1:
-            tk.Radiobutton(mf, text=t, variable=self.mode_var, 
-                          value=v, command=self.set_mode).pack(side=tk.LEFT, padx=5)
+        tk.Frame(left_frame, height=10).pack()
         
-        # 模式选择 - 第二行
-        mf2 = tk.Frame(self.root)
-        mf2.pack(pady=2)
+        # 词性筛选区域（仅词性模式有效）
+        self.pos_frame = tk.LabelFrame(left_frame, text="词性筛选 (仅词性模式)", font=("微软雅黑", 9))
+        self.pos_frame.pack(fill=tk.X, pady=5)
         
-        tk.Radiobutton(mf2, text="假名->汉字", variable=self.mode_var, 
-                      value="kana2kanji", command=self.set_mode).pack(side=tk.LEFT, padx=5)
+        # 词性筛选 - 分类放置
+        pos_categories = [
+            ("动词", ["他I", "他II", "他Ⅲ", "自I", "自II", "自Ⅲ"]),
+            ("形容词", ["形I", "形II"]),
+            ("名词", ["名"]),
+            ("助词", ["格助", "接助", "終助", "並助", "取立て助", "準助", "準体"]),
+            ("其他", ["副", "連体", "接", "感", "接頭", "接尾", "固名"]),
+        ]
         
-        # 错题训练按钮
-        self.wrong_btn = tk.Button(mf2, text="错题训练 (0)", command=self.start_wrong_mode,
-                                   fg="red", width=10)
-        self.wrong_btn.pack(side=tk.LEFT, padx=10)
+        for cat_name, pos_list in pos_categories:
+            cat_frame = tk.Frame(self.pos_frame)
+            cat_frame.pack(fill=tk.X, padx=5, pady=2)
+            tk.Label(cat_frame, text=cat_name+":", font=("微软雅黑", 8), width=6).pack(side=tk.LEFT)
+            for p in pos_list:
+                if p in self.pos_filters:
+                    cb = tk.Checkbutton(cat_frame, text=p, variable=self.pos_filters[p],
+                                       command=self.on_pos_filter_changed, font=("微软雅黑", 8))
+                    cb.pack(side=tk.LEFT, padx=2)
         
-        # 跳过已掌握单词的复选框
-        self.skip_cb = tk.Checkbutton(mf2, text="排除已掌握", 
-                                      variable=self.skip_mastered,
-                                      command=self.on_skip_changed)
-        self.skip_cb.pack(side=tk.LEFT, padx=10)
+        # 全选/取消全选按钮
+        pos_btn_frame = tk.Frame(self.pos_frame)
+        pos_btn_frame.pack(fill=tk.X, pady=3)
+        tk.Button(pos_btn_frame, text="全选动词", command=self.select_verbs_only, 
+                 font=("微软雅黑", 8), width=10).pack(side=tk.LEFT, padx=2)
+        tk.Button(pos_btn_frame, text="全选", command=self.select_all_pos, 
+                 font=("微软雅黑", 8), width=6).pack(side=tk.LEFT, padx=2)
+        tk.Button(pos_btn_frame, text="取消全选", command=self.deselect_all_pos, 
+                 font=("微软雅黑", 8), width=8).pack(side=tk.LEFT, padx=2)
         
-        # 每轮题数
-        tk.Label(mf2, text="每题数:").pack(side=tk.LEFT, padx=(20,5))
+        tk.Frame(left_frame, height=10).pack()
+        
+        # 错题训练和排除选项
+        self.wrong_btn = tk.Button(left_frame, text="错题训练 (0)", command=self.start_wrong_mode,
+                                   fg="red", width=15)
+        self.wrong_btn.pack(anchor=tk.W, pady=2)
+        
+        tk.Checkbutton(left_frame, text="排除已掌握单词", 
+                      variable=self.skip_mastered,
+                      command=self.on_skip_changed).pack(anchor=tk.W, pady=2)
+        
+        # 每题数
+        num_frame = tk.Frame(left_frame)
+        num_frame.pack(anchor=tk.W, pady=5)
+        tk.Label(num_frame, text="每题数:").pack(side=tk.LEFT)
         self.num_var = tk.StringVar(value="20")
-        num_spin = tk.Spinbox(mf2, from_=5, to=50, width=4, 
+        num_spin = tk.Spinbox(num_frame, from_=5, to=50, width=4, 
                               textvariable=self.num_var, command=self.set_quiz_num)
-        num_spin.pack(side=tk.LEFT)
+        num_spin.pack(side=tk.LEFT, padx=5)
         
-        # 已掌握单词计数
-        self.mastered_lb = tk.Label(self.root, text="已掌握: 0 个单词", fg="green")
-        self.mastered_lb.pack(pady=2)
+        tk.Frame(left_frame, height=10).pack()
         
-        # 文件信息
-        self.file_lb = tk.Label(self.root, text="CSV文件: 0  |  总词数: 0", fg="blue")
-        self.file_lb.pack(pady=2)
+        # 状态信息
+        self.mastered_lb = tk.Label(left_frame, text="已掌握: 0 个", fg="green", anchor=tk.W)
+        self.mastered_lb.pack(fill=tk.X, pady=2)
         
-        # 模式提示
-        self.mode_hint = tk.Label(self.root, text="", fg="red", font=("微软雅黑", 10))
-        self.mode_hint.pack(pady=2)
+        self.file_lb = tk.Label(left_frame, text="CSV: 0  |  词数: 0", fg="blue", anchor=tk.W, wraplength=280)
+        self.file_lb.pack(fill=tk.X, pady=2)
         
-        # 得分信息
-        self.info_lb = tk.Label(self.root, text="单词: 0  |  得分: 0/0")
+        self.mode_hint = tk.Label(left_frame, text="", fg="red", anchor=tk.W)
+        self.mode_hint.pack(fill=tk.X, pady=2)
+        
+        # --- 右侧题目区 ---
+        self.info_lb = tk.Label(right_frame, text="单词: 0  |  得分: 0/0", font=("微软雅黑", 10))
         self.info_lb.pack(pady=5)
         
-        # 题目
-        self.q_lb = tk.Label(self.root, text="", font=("微软雅黑", 14), wraplength=640)
+        self.q_lb = tk.Label(right_frame, text="", font=("微软雅黑", 14), wraplength=400, justify=tk.CENTER)
         self.q_lb.pack(pady=20)
         
-        # 选项
         self.opt_btns = []
-        of = tk.Frame(self.root)
+        of = tk.Frame(right_frame)
         of.pack(pady=10)
         
         for i in range(4):
-            rb = tk.Radiobutton(of, text="", variable=self.sel_var, value=i)
+            rb = tk.Radiobutton(of, text="", variable=self.sel_var, value=i, font=("微软雅黑", 11))
             rb.pack(anchor=tk.W, pady=3)
             self.opt_btns.append(rb)
         
-        # 按钮
-        bf = tk.Frame(self.root)
+        bf = tk.Frame(right_frame)
         bf.pack(pady=15)
         
         self.submit_btn = tk.Button(bf, text="提交", command=self.submit, width=8)
@@ -190,12 +251,38 @@ class QuizApp:
         self.restart_btn = tk.Button(bf, text="重新开始", command=self.restart, width=8)
         self.restart_btn.pack(side=tk.LEFT, padx=5)
         
-        # 结果
-        self.res_lb = tk.Label(self.root, text="", font=("微软雅黑", 12))
+        self.res_lb = tk.Label(right_frame, text="", font=("微软雅黑", 12))
         self.res_lb.pack(pady=10)
     
+    def select_verbs_only(self):
+        """只选择动词"""
+        # 先全部取消
+        for var in self.pos_filters.values():
+            var.set(False)
+        # 选择动词
+        verb_types = ["他I", "他II", "他Ⅲ", "自I", "自II", "自Ⅲ"]
+        for p in verb_types:
+            if p in self.pos_filters:
+                self.pos_filters[p].set(True)
+        self.on_pos_filter_changed()
+    
+    def select_all_pos(self):
+        for var in self.pos_filters.values():
+            var.set(True)
+        self.on_pos_filter_changed()
+    
+    def deselect_all_pos(self):
+        for var in self.pos_filters.values():
+            var.set(False)
+        self.on_pos_filter_changed()
+    
+    def on_pos_filter_changed(self):
+        """词性筛选变更时触发"""
+        # 只有在词性模式下才重新开始
+        if self.mode == 2:
+            self.restart()
+    
     def on_skip_changed(self):
-        """排除已掌握单词选项变更时触发"""
         self.restart()
     
     def set_quiz_num(self):
@@ -210,6 +297,7 @@ class QuizApp:
         mode_map = {"jp2cn": 0, "cn2jp": 1, "full": 2, "reading": 3, "kana2kanji": 4}
         new_mode = mode_map.get(self.mode_var.get(), 0)
         
+        # 检查模式切换的条件
         if new_mode == 3:
             has_reading_words = [w for w in self.all_words if self.has_reading(w)]
             if len(has_reading_words) < 5:
@@ -225,6 +313,17 @@ class QuizApp:
         self.is_wrong_mode = False
         self.mode_hint.config(text="")
         self.mode = new_mode
+        
+        # 非词性模式时禁用词性筛选框
+        state = tk.NORMAL if new_mode == 2 else tk.DISABLED
+        for child in self.pos_frame.winfo_children():
+            if isinstance(child, tk.Frame):
+                for sub in child.winfo_children():
+                    if isinstance(sub, tk.Checkbutton):
+                        sub.config(state=state)
+                    elif isinstance(sub, tk.Label):
+                        sub.config(state=state)
+        
         self.restart()
     
     def start_wrong_mode(self):
@@ -243,7 +342,7 @@ class QuizApp:
         self.csv_files = files
         
         if not files:
-            self.file_lb.config(text="未找到CSV文件，请放入同目录", fg="red")
+            self.file_lb.config(text="未找到CSV文件", fg="red")
             self.q_lb.config(text="请将CSV文件放在程序所在文件夹")
             return
         
@@ -252,8 +351,8 @@ class QuizApp:
             cnt = self.load_csv_file(f)
             total += cnt
         
-        self.file_lb.config(text=f"CSV文件: {len(files)}  |  总词数: {total}", fg="blue")
-        self.mastered_lb.config(text=f"已掌握: {len(self.mastered_words)} 个单词", fg="green")
+        self.file_lb.config(text=f"CSV: {len(files)}  |  词数: {total}", fg="blue")
+        self.mastered_lb.config(text=f"已掌握: {len(self.mastered_words)} 个", fg="green")
         
         if self.all_words:
             self.restart()
@@ -282,7 +381,6 @@ class QuizApp:
         return cnt
     
     def get_word_pool(self):
-        """获取当前可用的单词池（根据模式和排除选项）"""
         base = self.all_words if not self.is_wrong_mode else self.wrong_words
         
         # 根据模式筛选
@@ -290,6 +388,10 @@ class QuizApp:
             pool = [w for w in base if self.has_reading(w)]
         elif self.mode == 4:
             pool = [w for w in base if self.is_kanji_word(w['jp']) and self.has_reading(w)]
+        elif self.mode == 2:
+            # 词性模式：根据筛选条件过滤
+            selected_pos = [p for p, var in self.pos_filters.items() if var.get()]
+            pool = [w for w in base if w['pos'] in selected_pos]
         else:
             pool = base[:]
         
@@ -308,6 +410,14 @@ class QuizApp:
                 if messagebox.askyesno("提示", msg + "。是否取消排除已掌握单词？"):
                     self.skip_mastered.set(False)
                     self.restart()
+            elif self.mode == 2:
+                # 词性模式下没有可用单词，提示用户调整筛选
+                selected = [p for p, var in self.pos_filters.items() if var.get()]
+                if selected:
+                    msg += "（当前词性筛选条件过严）"
+                if messagebox.askyesno("提示", msg + "。是否选择所有词性？"):
+                    self.select_all_pos()
+                    self.restart()
             else:
                 messagebox.showwarning("提示", msg)
             return
@@ -320,7 +430,7 @@ class QuizApp:
         self.wrong_file = None
         self.sel_var.set(-1)
         self.res_lb.config(text="")
-        self.submit_btn.config(state=tk.NORMAL)
+        self.submit_btn.config(text="提交", command=self.submit, state=tk.NORMAL)
         self.next_btn.config(state=tk.DISABLED)
         self.show_q()
     
@@ -344,7 +454,7 @@ class QuizApp:
         self.need_record = False
         self.sel_var.set(-1)
         self.res_lb.config(text="")
-        self.submit_btn.config(state=tk.NORMAL)
+        self.submit_btn.config(text="提交", command=self.submit, state=tk.NORMAL)
         self.next_btn.config(state=tk.DISABLED)
         
         mode_text = "错题训练" if self.is_wrong_mode else "普通"
@@ -409,6 +519,7 @@ class QuizApp:
             return opts
         elif mode == 2:
             correct = w['pos']
+            # 从当前词性筛选池中选取干扰项
             wrong = []
             for p in pool:
                 if p['pos'] != correct and p['pos'] not in wrong:
@@ -484,15 +595,13 @@ class QuizApp:
         if is_correct:
             self.score += 1
             self.res_lb.config(text="回答正确！", fg="green")
-            # 答对即记录为已掌握
             self.add_mastered(w)
             self.need_record = True
-            self.mastered_lb.config(text=f"已掌握: {len(self.mastered_words)} 个单词", fg="green")
+            self.mastered_lb.config(text=f"已掌握: {len(self.mastered_words)} 个", fg="green")
         else:
             wrong_entry = f"{w['jp']}|{w['reading']}|{w['pos']}|{w['cn']}|{w.get('src','')}"
             self.wrong.append(wrong_entry)
             self.res_lb.config(text=f"回答错误。正确答案：{correct}", fg="red")
-            # 显示订正按钮
             self.submit_btn.config(text="订正", command=self.correct_submit)
         
         self.submit_btn.config(state=tk.DISABLED)
@@ -503,13 +612,10 @@ class QuizApp:
         self.info_lb.config(text=f"[{mode_text}/{mode_names[self.mode]}{skip_text}] 单词: {len(self.words)}  |  得分: {self.score}/{self.total}")
     
     def correct_submit(self):
-        """订正功能：点击订正后，如果用户选择了正确答案则记录"""
-        # 重新启用提交按钮，但改名为"确认订正"
         self.submit_btn.config(text="确认订正", command=self.confirm_correct, state=tk.NORMAL)
         self.res_lb.config(text="请重新选择正确答案进行订正", fg="blue")
     
     def confirm_correct(self):
-        """确认订正：用户选择正确答案后记录为已掌握"""
         sel = self.sel_var.get()
         
         if sel == -1:
@@ -541,26 +647,21 @@ class QuizApp:
         chosen = opts[sel]
         
         if chosen == correct:
-            # 订正正确，记录为已掌握
             self.add_mastered(w)
-            self.mastered_lb.config(text=f"已掌握: {len(self.mastered_words)} 个单词", fg="green")
+            self.mastered_lb.config(text=f"已掌握: {len(self.mastered_words)} 个", fg="green")
             self.res_lb.config(text="订正正确！已记录为掌握", fg="green")
             
-            # 从错题列表中移除（如果存在）
             wrong_key = f"{w['jp']}|{w['reading']}|{w['pos']}|{w['cn']}"
             self.wrong = [item for item in self.wrong if wrong_key not in item]
         else:
             self.res_lb.config(text=f"订正错误。正确答案：{correct}。请继续订正", fg="red")
-            # 订正错误，允许继续尝试
             self.submit_btn.config(text="确认订正", command=self.confirm_correct, state=tk.NORMAL)
             return
         
-        # 恢复提交按钮
         self.submit_btn.config(text="提交", command=self.submit, state=tk.DISABLED)
         self.next_btn.config(state=tk.NORMAL)
     
     def next_q(self):
-        # 恢复提交按钮
         self.submit_btn.config(text="提交", command=self.submit, state=tk.NORMAL)
         self.idx += 1
         self.show_q()
