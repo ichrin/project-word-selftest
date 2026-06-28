@@ -140,7 +140,7 @@ class QuizApp:
         return bool(kanji_pattern.search(text))
     
     def get_reading_for_display(self, reading):
-        clean = re.sub(r'[①②③④⑤⑥⑦⑧⑨⑩]', '', reading)
+        clean = re.sub(r'[⓪①②③④⑤⑥⑦⑧⑨⑩]', '', reading)
         clean = re.sub(r'[（(）).]', '', clean)
         return clean.strip()
     
